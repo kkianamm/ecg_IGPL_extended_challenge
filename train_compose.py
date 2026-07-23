@@ -27,7 +27,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import config_ipl as C
 from config_experiments import get_experiment
-from labels_io import dataset_label
 from ipl import (IPLModel, cache_features, few_shot_indices,
                  load_biomedclip)
 from data_fix import build_splits          # corrected, alias-aware label resolution
@@ -74,20 +73,6 @@ def metric_display_names(class_names):
     An unknown or duplicated class raises an error instead of silently printing
     the long internal label, making the output-label fix easy to verify.
     """
-    # The fixed NORM/MI/STTC/CD/HYP contract only applies to PTB-XL. For other
-    # datasets (e.g. Challenge 2020's 24 scored classes) report the dataset's
-    # own class codes, in config.CLASSES order, without reordering columns.
-    if getattr(C, "DATASET", "ptbxl") != "ptbxl":
-        import config as _base
-        desc_to_code = {
-            str(d).strip().lower(): c
-            for c, d in getattr(_base, "CLASS_DESCRIPTIONS", {}).items()
-        }
-        return [
-            desc_to_code.get(str(n).strip().lower(), str(n))
-            for n in class_names
-        ]
-
     display_names = []
     for class_name in class_names:
         normalized = str(class_name).strip().lower()
@@ -368,7 +353,7 @@ def main():
         if args.exp.lower() in {"zeroshot", "zero_shot", "zero-shot"}
         else args.exp
     )
-    print(f"\n=== {display_name} on {dataset_label()} test fold ===")
+    print(f"\n=== {display_name} on PTB-XL test fold ===")
     print_metrics(metrics, "multi")
 
     shot_suffix = "full" if args.shots == 0 else f"{args.shots}shot"
