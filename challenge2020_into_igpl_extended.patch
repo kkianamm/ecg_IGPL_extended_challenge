@@ -1,7 +1,7 @@
 From 4e64eae5850af278dfc0795ec11a27f8950810b9 Mon Sep 17 00:00:00 2001
 From: x <x>
 Date: Thu, 23 Jul 2026 21:53:53 +0000
-Subject: [PATCH] Add PhysioNet/CinC Challenge 2020 dataset support
+Subject: [PATCH 1/2] Add PhysioNet/CinC Challenge 2020 dataset support
 
 Ports challenge2020_labels.py / challenge2020_data.py and the config,
 prepare_data and ecg_prompts changes from ecgclip5, and makes the
@@ -1246,6 +1246,262 @@ index 735f1f1..9b90d5f 100644
      display_names = []
      for class_name in class_names:
          normalized = str(class_name).strip().lower()
+-- 
+2.43.0
+
+
+From 7286b81d3736fffc6a36e728501264dc325afa94 Mon Sep 17 00:00:00 2001
+From: x <x>
+Date: Thu, 23 Jul 2026 22:29:38 +0000
+Subject: [PATCH 2/2] Fail loudly on labels.csv/config class mismatch
+
+- config.LABELS_CSV: Challenge 2020's two class sets write separate label
+  files inside one shared WORK_DIR, so switching C2020_CLASS_SET cannot
+  silently invalidate an existing CSV. Images stay shared.
+- labels_io.read_labels(): single validated reader used by zero_shot_eval,
+  extract_features, finetune_clip and train_biomedcoop. Reports DATASET,
+  C2020_CLASS_SET, CLASSES, the file's own columns and the fix command,
+  before the image-encoding pass instead of after it.
+---
+ README_CHALLENGE2020.md | 18 +++++++++++
+ challenge2020_data.py   |  2 +-
+ config.py               |  9 ++++++
+ extract_features.py     |  4 +--
+ finetune_clip.py        |  4 +--
+ labels_io.py            | 72 +++++++++++++++++++++++++++++++++++++++++
+ train_biomedcoop.py     |  6 ++--
+ zero_shot_eval.py       |  6 ++--
+ 8 files changed, 108 insertions(+), 13 deletions(-)
+ create mode 100644 labels_io.py
+
+diff --git a/README_CHALLENGE2020.md b/README_CHALLENGE2020.md
+index 864d4cb..1e58153 100644
+--- a/README_CHALLENGE2020.md
++++ b/README_CHALLENGE2020.md
+@@ -150,3 +150,21 @@ exact contract the rest of the repo expects. `config_ipl.py` picks up
+   is possible there. The split is record-level (standard for this dataset).
+ - The split and rendering are deterministic given `C2020_SPLIT_SEED` and
+   `C2020_WINDOW_SECONDS`.
++
++## Troubleshooting: `KeyError: "None of [Index([...])] are in the [columns]"`
++
++This means `config.CLASSES` and the label file disagree — the CSV was written by
++a run with a different class vocabulary. Run `python diagnose.py` to see which.
++The two causes:
++
++- **`DATASET` not exported in this shell.** `config.py` falls back to `ptbxl`,
++  so `CLASSES` becomes `NORM/MI/STTC/CD/HYP` while `WORK_DIR` still points at the
++  Challenge 2020 work directory. Fix: `export DATASET=challenge2020`.
++- **`C2020_CLASS_SET` changed after preparing the data.** The `scored` and
++  `superclass` vocabularies are different column sets.
++
++Both now fail immediately with a diagnostic instead of a bare pandas `KeyError`
++after the image-encoding pass, and the two Challenge 2020 class sets write to
++separate files (`labels.csv` and `labels_superclass.csv`) inside one shared
++`WORK_DIR`, so switching between them never invalidates existing work. The
++rendered images are shared — you never re-render 43k records to change class set.
+diff --git a/challenge2020_data.py b/challenge2020_data.py
+index fd71e97..5faf885 100644
+--- a/challenge2020_data.py
++++ b/challenge2020_data.py
+@@ -325,7 +325,7 @@ def main():
+     for cls in C.CLASSES:
+         print(f"  {cls:7s}: {int(df[cls].sum())}")
+ 
+-    out_csv = os.path.join(C.WORK_DIR, "labels.csv")
++    out_csv = getattr(C, "LABELS_CSV", os.path.join(C.WORK_DIR, "labels.csv"))
+     df.to_csv(out_csv)
+     print(f"Saved labels -> {out_csv}")
+ 
+diff --git a/config.py b/config.py
+index 1b33768..733943e 100644
+--- a/config.py
++++ b/config.py
+@@ -135,5 +135,14 @@ IMG_DIR = os.path.join(WORK_DIR, "images")           # rendered ECG PNGs
+ FEAT_DIR = os.path.join(WORK_DIR, "features")         # cached embeddings
+ CKPT_DIR = os.path.join(WORK_DIR, "checkpoints")      # fine-tuned weights
+ 
++# The label file depends on the active class vocabulary, but the rendered images
++# do not. Challenge 2020's two class sets therefore share IMG_DIR (rendering
++# 43k records is the expensive step) while writing separate label files, so
++# switching C2020_CLASS_SET can never silently invalidate an existing CSV.
++if DATASET == "challenge2020" and C2020_CLASS_SET != "scored":
++    LABELS_CSV = os.path.join(WORK_DIR, f"labels_{C2020_CLASS_SET}.csv")
++else:
++    LABELS_CSV = os.path.join(WORK_DIR, "labels.csv")
++
+ for _d in (WORK_DIR, IMG_DIR, FEAT_DIR, CKPT_DIR):
+     os.makedirs(_d, exist_ok=True)
+diff --git a/extract_features.py b/extract_features.py
+index 58ed266..5b49eb8 100644
+--- a/extract_features.py
++++ b/extract_features.py
+@@ -16,6 +16,7 @@ import pandas as pd
+ import torch
+ 
+ import config as C
++from labels_io import read_labels
+ from model_utils import load_biomedclip, get_device
+ from zero_shot_eval import encode_images
+ 
+@@ -28,8 +29,7 @@ def main():
+     device = get_device()
+     model, preprocess, _ = load_biomedclip(device)
+ 
+-    labels_df = pd.read_csv(os.path.join(C.WORK_DIR, "labels.csv"),
+-                            index_col="ecg_id")
++    labels_df = read_labels(index_col="ecg_id")
+     if args.limit:
+         labels_df = labels_df.iloc[:args.limit]
+ 
+diff --git a/finetune_clip.py b/finetune_clip.py
+index 9934d77..5a5adae 100644
+--- a/finetune_clip.py
++++ b/finetune_clip.py
+@@ -31,6 +31,7 @@ from torch.utils.data import Dataset, DataLoader
+ from tqdm import tqdm
+ 
+ import config as C
++from labels_io import read_labels
+ from model_utils import load_biomedclip, get_device
+ from prepare_data import image_path_for
+ 
+@@ -106,8 +107,7 @@ def main():
+     trainable = [p for p in model.parameters() if p.requires_grad]
+     print(f"Trainable params: {sum(p.numel() for p in trainable):,}")
+ 
+-    labels_df = pd.read_csv(os.path.join(C.WORK_DIR, "labels.csv"),
+-                            index_col="ecg_id")
++    labels_df = read_labels(index_col="ecg_id")
+     if args.limit:
+         labels_df = labels_df.iloc[:args.limit]
+     train_df = labels_df[labels_df.strat_fold.isin(C.TRAIN_FOLDS)]
+diff --git a/labels_io.py b/labels_io.py
+new file mode 100644
+index 0000000..0a89fb6
+--- /dev/null
++++ b/labels_io.py
+@@ -0,0 +1,72 @@
++"""
++Single place to read ``labels.csv``, with a preflight check that the file's
++columns match the class vocabulary ``config.py`` resolved.
++
++Without this, a mismatch surfaces as a bare pandas ``KeyError: "None of
++[Index([...])] are in the [columns]"`` *after* the expensive image-encoding
++pass, which says nothing about the actual cause: ``DATASET`` /
++``C2020_CLASS_SET`` not matching the run that generated the file.
++"""
++from __future__ import annotations
++
++import os
++
++import pandas as pd
++
++import config as C
++
++
++def labels_path() -> str:
++    """Path to the label file for the active dataset + class set."""
++    return getattr(C, "LABELS_CSV", os.path.join(C.WORK_DIR, "labels.csv"))
++
++
++def check_columns(df: pd.DataFrame, path: str | None = None) -> None:
++    """Raise a diagnostic error if `df` lacks a column for every active class."""
++    missing = [c for c in C.CLASSES if c not in df.columns]
++    if not missing:
++        return
++
++    path = path or labels_path()
++    label_cols = [
++        c for c in df.columns
++        if c not in ("filename", "source", "fs", "sig_len", "report",
++                     "superclasses", "strat_fold", "patient_id", "age", "sex")
++    ]
++    hint = (
++        "Regenerate the labels with the same settings you are evaluating "
++        "under:\n"
++        f"    DATASET={C.DATASET} "
++        + (f"C2020_CLASS_SET={C.C2020_CLASS_SET} " if C.DATASET == "challenge2020" else "")
++        + ("python challenge2020_data.py"
++           if C.DATASET == "challenge2020" else "python prepare_data.py")
++    )
++    raise SystemExit(
++        f"\nLabel/config mismatch.\n\n"
++        f"  config.DATASET   = {C.DATASET}\n"
++        + (f"  C2020_CLASS_SET  = {C.C2020_CLASS_SET}\n"
++           if C.DATASET == "challenge2020" else "")
++        + f"  config.CLASSES   = {C.CLASSES}\n"
++        f"  labels file      = {path}\n"
++        f"  its label columns= {label_cols}\n\n"
++        f"Missing from the file: {missing}\n\n"
++        f"The file was written by a run with a different class vocabulary.\n"
++        f"{hint}\n"
++    )
++
++
++def read_labels(index_col: str = "ecg_id", validate: bool = True) -> pd.DataFrame:
++    """Read the active label file, checking it matches ``config.CLASSES``."""
++    path = labels_path()
++    if not os.path.exists(path):
++        raise SystemExit(
++            f"\nNo label file at {path}.\n"
++            f"Run "
++            + ("challenge2020_data.py" if C.DATASET == "challenge2020"
++               else "prepare_data.py")
++            + f" with DATASET={C.DATASET} first.\n"
++        )
++    df = pd.read_csv(path, index_col=index_col)
++    if validate:
++        check_columns(df, path)
++    return df
+diff --git a/train_biomedcoop.py b/train_biomedcoop.py
+index fb18307..4c9c5c2 100644
+--- a/train_biomedcoop.py
++++ b/train_biomedcoop.py
+@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader, Dataset
+ from tqdm import tqdm
+ 
+ import config as C
++from labels_io import read_labels
+ from biomedcoop import build_biomedcoop
+ from ecg_prompts import get_templates, readable_name
+ from evaluation import (
+@@ -307,10 +308,7 @@ def main():
+         ml_temperature=args.ml_temperature,
+     )
+ 
+-    labels_df = pd.read_csv(
+-        os.path.join(C.WORK_DIR, "labels.csv"),
+-        index_col="ecg_id",
+-    )
++    labels_df = read_labels(index_col="ecg_id")
+     if args.limit:
+         labels_df = labels_df.iloc[: args.limit]
+ 
+diff --git a/zero_shot_eval.py b/zero_shot_eval.py
+index 8028f8f..ec685ab 100644
+--- a/zero_shot_eval.py
++++ b/zero_shot_eval.py
+@@ -22,6 +22,7 @@ from PIL import Image
+ from tqdm import tqdm
+ 
+ import config as C
++from labels_io import read_labels
+ from evaluation import (
+     evaluate_multilabel,
+     evaluate_single_label,
+@@ -118,10 +119,7 @@ def main():
+     device = get_device()
+     print(f"Device: {device} | task={args.task}")
+ 
+-    labels_df = pd.read_csv(
+-        os.path.join(C.WORK_DIR, "labels.csv"),
+-        index_col="ecg_id",
+-    )
++    labels_df = read_labels(index_col="ecg_id")
+     val_df = labels_df[labels_df.strat_fold == C.VAL_FOLD]
+     test_df = labels_df[labels_df.strat_fold == C.TEST_FOLD]
+ 
 -- 
 2.43.0
 

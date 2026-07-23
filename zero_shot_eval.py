@@ -22,6 +22,7 @@ from PIL import Image
 from tqdm import tqdm
 
 import config as C
+from labels_io import read_labels
 from evaluation import (
     evaluate_multilabel,
     evaluate_single_label,
@@ -118,10 +119,7 @@ def main():
     device = get_device()
     print(f"Device: {device} | task={args.task}")
 
-    labels_df = pd.read_csv(
-        os.path.join(C.WORK_DIR, "labels.csv"),
-        index_col="ecg_id",
-    )
+    labels_df = read_labels(index_col="ecg_id")
     val_df = labels_df[labels_df.strat_fold == C.VAL_FOLD]
     test_df = labels_df[labels_df.strat_fold == C.TEST_FOLD]
 

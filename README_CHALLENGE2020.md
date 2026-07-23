@@ -150,3 +150,21 @@ exact contract the rest of the repo expects. `config_ipl.py` picks up
   is possible there. The split is record-level (standard for this dataset).
 - The split and rendering are deterministic given `C2020_SPLIT_SEED` and
   `C2020_WINDOW_SECONDS`.
+
+## Troubleshooting: `KeyError: "None of [Index([...])] are in the [columns]"`
+
+This means `config.CLASSES` and the label file disagree — the CSV was written by
+a run with a different class vocabulary. Run `python diagnose.py` to see which.
+The two causes:
+
+- **`DATASET` not exported in this shell.** `config.py` falls back to `ptbxl`,
+  so `CLASSES` becomes `NORM/MI/STTC/CD/HYP` while `WORK_DIR` still points at the
+  Challenge 2020 work directory. Fix: `export DATASET=challenge2020`.
+- **`C2020_CLASS_SET` changed after preparing the data.** The `scored` and
+  `superclass` vocabularies are different column sets.
+
+Both now fail immediately with a diagnostic instead of a bare pandas `KeyError`
+after the image-encoding pass, and the two Challenge 2020 class sets write to
+separate files (`labels.csv` and `labels_superclass.csv`) inside one shared
+`WORK_DIR`, so switching between them never invalidates existing work. The
+rendered images are shared — you never re-render 43k records to change class set.

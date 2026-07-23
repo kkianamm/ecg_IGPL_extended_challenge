@@ -135,5 +135,14 @@ IMG_DIR = os.path.join(WORK_DIR, "images")           # rendered ECG PNGs
 FEAT_DIR = os.path.join(WORK_DIR, "features")         # cached embeddings
 CKPT_DIR = os.path.join(WORK_DIR, "checkpoints")      # fine-tuned weights
 
+# The label file depends on the active class vocabulary, but the rendered images
+# do not. Challenge 2020's two class sets therefore share IMG_DIR (rendering
+# 43k records is the expensive step) while writing separate label files, so
+# switching C2020_CLASS_SET can never silently invalidate an existing CSV.
+if DATASET == "challenge2020" and C2020_CLASS_SET != "scored":
+    LABELS_CSV = os.path.join(WORK_DIR, f"labels_{C2020_CLASS_SET}.csv")
+else:
+    LABELS_CSV = os.path.join(WORK_DIR, "labels.csv")
+
 for _d in (WORK_DIR, IMG_DIR, FEAT_DIR, CKPT_DIR):
     os.makedirs(_d, exist_ok=True)
