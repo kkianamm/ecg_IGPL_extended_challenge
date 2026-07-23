@@ -22,7 +22,7 @@ from PIL import Image
 from tqdm import tqdm
 
 import config as C
-from labels_io import read_labels
+from labels_io import read_labels, dataset_label
 from evaluation import (
     evaluate_multilabel,
     evaluate_single_label,
@@ -188,7 +188,7 @@ def main():
             class_names=C.CLASSES,
         )
 
-    print("\n=== Zero-shot BiomedCLIP on PTB-XL test fold ===")
+    print(f"\n=== Zero-shot BiomedCLIP on {dataset_label()} test fold ===")
     print_metrics(metrics, args.task)
 
     run_name = args.run_name or default_run_name(args.task, args.ckpt)

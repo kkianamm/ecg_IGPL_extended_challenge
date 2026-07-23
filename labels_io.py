@@ -70,3 +70,10 @@ def read_labels(index_col: str = "ecg_id", validate: bool = True) -> pd.DataFram
     if validate:
         check_columns(df, path)
     return df
+
+
+def dataset_label():
+    """Human-readable name of the active dataset, for report headers."""
+    if getattr(C, "DATASET", "ptbxl") == "challenge2020":
+        return f"Challenge 2020 ({len(C.CLASSES)} {C.C2020_CLASS_SET} classes)"
+    return "PTB-XL"

@@ -27,6 +27,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import config_ipl as C
 from config_experiments import get_experiment
+from labels_io import dataset_label
 from ipl import (IPLModel, cache_features, few_shot_indices,
                  load_biomedclip)
 from data_fix import build_splits          # corrected, alias-aware label resolution
@@ -367,7 +368,7 @@ def main():
         if args.exp.lower() in {"zeroshot", "zero_shot", "zero-shot"}
         else args.exp
     )
-    print(f"\n=== {display_name} on PTB-XL test fold ===")
+    print(f"\n=== {display_name} on {dataset_label()} test fold ===")
     print_metrics(metrics, "multi")
 
     shot_suffix = "full" if args.shots == 0 else f"{args.shots}shot"
